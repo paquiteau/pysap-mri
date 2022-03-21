@@ -7,6 +7,8 @@
 # for details.
 ##########################################################################
 
+"""Ordered weighted L1 norm proximal operator."""
+
 from modopt.opt.proximity import ProximityParent, OrderedWeightedL1Norm
 
 import numpy as np
@@ -14,8 +16,7 @@ from joblib import Parallel, delayed
 
 
 class OWL(ProximityParent):
-    """This class handles reshaping coefficients based on mode
-    and feeding in right format the OWL operation to OrderedWeightedL1Norm
+    """Ordered weighted L1 Norm implementation.
 
     Parameters
     ----------
@@ -36,7 +37,12 @@ class OWL(ProximityParent):
         scale_based -> on al coefficients in each scale
     n_jobs: int, default 1
         number of cores to be used for operation
+
+    Notes
+    -----
+    This implements the OWL norm as described in XXX.
     """
+
     def __init__(self, alpha, beta, bands_shape, n_coils,
                  mode='band_based', n_jobs=1):
         self.mode = mode
@@ -44,9 +50,9 @@ class OWL(ProximityParent):
         self.n_coils = n_coils
         if n_coils < 1:
             raise ValueError('Number of channels must be strictly positive')
-        elif n_coils > 1:
+        if n_coils > 1:
             self.band_shape = bands_shape[0]
-        else:
+        elif n_coils is None:
             self.band_shape = bands_shape
         self.band_sizes = np.prod(self.band_shape, axis=1)
         if self.mode == 'all':
@@ -88,14 +94,36 @@ class OWL(ProximityParent):
 
     @staticmethod
     def _oscar_weights(alpha, beta, size):
-        """Here we parametrize weights based on alpha and beta"""
-        w = np.arange(size-1, -1, -1, dtype=np.float64)
-        w *= beta
-        w += alpha
-        return w
+        """Parametrize weights based on alpha and beta.
+
+        Parameters
+        ----------
+        alpha: float
+        beta:float
+        size: int
+
+        Returns
+        -------
+        np.ndarray
+            The parametrized weights.
+        """
+        weights = np.arange(size-1, -1, -1, dtype=np.float64)
+        weights *= beta
+        weights += alpha
+        return weights
 
     def _reshape_band_based(self, data):
-        """Function to reshape incoming data based on bands"""
+        """Reshape incoming data based on bands.
+
+        Parameters
+        ----------
+        data: np.ndarray
+            The data to reshape
+
+        Returns
+        -------
+        list: the reshaped data using bands.
+        """
         output = []
         start = 0
         for band_size in self.band_sizes:
@@ -107,12 +135,24 @@ class OWL(ProximityParent):
         return output
 
     def _reshape_scale_based(self, data):
+        """Reshape incoming data based on scales.
+
+        Parameters
+        ----------
+        data: np.ndarray
+            The data to reshape
+
+        Returns
+        -------
+        list: the reshaped data using scales.
+        """
         output = []
         start = 0
         for scale_size in np.unique(self.band_sizes):
             num_bands = np.sum(scale_size == self.band_sizes)
             stop = start + scale_size * num_bands
-            scale_size * np.sum(scale_size == self.band_sizes)
+            # scale_size * np.sum(scale_size == self.band_sizes)
+            # FIXME Why this useless statement ?
             output.append(np.reshape(
                 data[:,start:stop],
                 self.n_coils  * scale_size * num_bands,
@@ -122,12 +162,21 @@ class OWL(ProximityParent):
 
     def _op_method(self, data, extra_factor=1.0):
         """
-        Based on mode, reshape the coefficients and call OrderedWeightedL1Norm
+        Perform the ordered weighted norm proximal operator.
+
+        The data is reorded according to selected mode.
 
         Parameters
         ----------
         data: np.ndarray
             Input array of data
+        extra_factor: float
+            regularisation parameter multiplier.
+
+        Returns
+        -------
+        np.ndarray: the regularised data.
+
         """
         if self.mode == 'all':
             output = np.reshape(
@@ -135,7 +184,7 @@ class OWL(ProximityParent):
                 data.shape
             )
             return output
-        elif self.mode == 'band_based' or self.mode == 'scale_based':
+        if self.mode in ['band_based', 'scale_based']:
             if self.mode == 'band_based':
                 data_r = self._reshape_band_based(data)
                 sizes = self.band_sizes
@@ -166,7 +215,7 @@ class OWL(ProximityParent):
                 start = stop
             output = np.asarray(reshaped_data).T
             return np.asarray(output).T
-        elif self.mode == 'coeff_based':
+        if self.mode == 'coeff_based':
             output = Parallel(n_jobs=self.n_jobs)(
                 delayed(self.owl_operator.op)(
                     data[:, i],
@@ -175,23 +224,22 @@ class OWL(ProximityParent):
             return np.asarray(output).T
 
     def _cost_method(self, data):
-        """Cost function
-        Based on mode, reshape the incoming data and call cost in
-        OrderedWeightedL1Norm
-        This method calculate the cost function of the proximable part.
+        """Compute the cost function of the proximable part.
+
+        The cost function is determined by the mode attribute.
 
         Parameters
         ----------
         data: np.ndarray
-            Input array of the sparse code.
+            Input array of
 
         Returns
         -------
-        The cost of this sparse code
+        float: The cost of this sparse code
         """
         if self.mode == 'all':
-            cost = self.owl_operator.cost(data.flatten())
-        elif self.mode == 'band_based' or self.mode == 'scale_based':
+            return self.owl_operator.cost(data.flatten())
+        if self.mode in ['band_based', 'scale_based']:
             if self.mode == 'band_based':
                 data_r = self._reshape_band_based(data)
             else:
@@ -200,11 +248,9 @@ class OWL(ProximityParent):
                 delayed(self.owl_operator[i].cost)(
                     data_band)
                 for i, data_band in enumerate(data_r))
-            cost = np.sum(output)
         elif self.mode == 'coeff_based':
             output = Parallel(n_jobs=self.n_jobs)(
                 delayed(self.owl_operator.cost)(
                     data[:, i])
                 for i in range(data.shape[1]))
-            cost = np.sum(output)
-        return cost
+        return  np.sum(output)
